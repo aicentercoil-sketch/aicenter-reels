@@ -17,6 +17,7 @@ API = "https://aicenter.co.il/api/reels-job.php"
 TTS = "https://aicenter.co.il/api/reels-tts.php"
 TOKEN = os.environ.get("SITE_TOKEN", "")
 FPS, XF = 30, 0.25
+TEMPO = 1.08  # a touch faster than the raw voice: Reels pace
 W, H = 1080, 1920
 
 CSS = """
@@ -166,10 +167,26 @@ def tts(text, path, audio_dir=None, idx=0):
         f.write(data)
 
 
+def clean_wav(path):
+    """Gemini appends a C2PA provenance block to the raw PCM; played as sound it is a burst of static. Cut it."""
+    import wave
+    with wave.open(path, "rb") as w:
+        params, frames = w.getparams(), w.readframes(w.getnframes())
+    p = frames.find(b"C2PA")
+    while p != -1 and b"jumb" not in frames[p:p + 32]:
+        p = frames.find(b"C2PA", p + 4)
+    if p != -1:
+        frames = frames[:p - p % 2]
+        with wave.open(path, "wb") as w:
+            w.setparams(params)
+            w.writeframes(frames)
+
+
 def render_scene(i, sc, fr, d, audio_dir):
     au = f"{d}/s{i}.wav"
     tts(sc["say"], au, audio_dir, i)
-    voice = dur(au)
+    clean_wav(au)
+    voice = dur(au) / TEMPO
     length = round(voice + 0.5, 2)
     n = len(fr["states"])
     step = min(0.16, 0.9 / max(1, n))
@@ -187,7 +204,7 @@ def render_scene(i, sc, fr, d, audio_dir):
     for k in range(n):  # word-by-word title: each state replaces the previous one
         a = 0.05 + k * step
         b = (0.05 + (k + 1) * step) if k < n - 1 else length + 1
-        f.append(f"[{last}][{k + 1}:v]overlay=x=0:y='if(lt(t,{a + 0.18:.2f}),max(0,40*(1-(t-{a:.2f})/0.18)),0)':enable='between(t,{a:.2f},{b:.2f})'[v{k + 1}]")
+        f.append(f"[{last}][{k + 1}:v]overlay=x=0:y='{"if(lt(t,%.2f),40*pow(1-(t-%.2f)/0.22,2),0)" % (a + 0.22, a) if k == 0 else "0"}':enable='between(t,{a:.2f},{b:.2f})'[v{k + 1}]")
         last = f"v{k + 1}"
     # captions follow the voice: chunk timing by length
     total = sum(len(c) + 2 for _, c in fr["caps"]) or 1
@@ -199,10 +216,10 @@ def render_scene(i, sc, fr, d, audio_dir):
         last = f"c{k}"; at += span
     ai = 1 + n + len(fr["caps"])
     if fr.get("sticker"):  # the sticker drops in with a damped bounce
-        f.append(f"[{last}][{ai}:v]overlay=x=0:y='if(lt(t,0.3),-400,90*exp(-7*(t-0.3))*cos(16*(t-0.3)))':enable='gte(t,0.3)'[st]")
+        f.append(f"[{last}][{ai}:v]overlay=x=0:y='if(lt(t,0.3),-400,50*exp(-9*(t-0.3))*cos(14*(t-0.3)))':enable='gte(t,0.3)'[st]")
         last = "st"; ai += 1
     f.append(f"[{last}]format=yuv420p[vout]")
-    f.append(f"[{ai}:a]aresample=48000,apad=whole_dur={length}[aout]")
+    f.append(f"[{ai}:a]atempo={TEMPO},afade=t=in:d=0.02,afade=t=out:st={max(0, voice - 0.06):.2f}:d=0.06,aresample=48000,apad=whole_dur={length}[aout]")
     out = f"{d}/scene{i}.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", ";".join(f), "-map", "[vout]", "-map", "[aout]", "-t", str(length),
          "-r", str(FPS), "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", out])
