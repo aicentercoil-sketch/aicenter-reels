@@ -182,6 +182,48 @@ def clean_wav(path):
             w.writeframes(frames)
 
 
+_WHISPER = []
+
+
+def word_times(wav):
+    """Word timings of the real voice (faster-whisper on the runner's CPU). [] when unavailable: captions fall back to length."""
+    try:
+        from faster_whisper import WhisperModel
+        if not _WHISPER:
+            _WHISPER.append(WhisperModel(os.environ.get("WHISPER_MODEL", "small"), device="cpu", compute_type="int8"))
+        segs, _ = _WHISPER[0].transcribe(wav, language="he", word_timestamps=True, beam_size=1, vad_filter=False, condition_on_previous_text=False)
+        return [(w.start, w.end, w.word.strip()) for sg in segs for w in (sg.words or []) if w.word.strip()]
+    except Exception as e:  # noqa: BLE001
+        print("whisper off:", e, flush=True)
+        return []
+
+
+def caption_times(words, voice, wt):
+    """Start/end of each caption word. The captions are written text, the voice is phonetic Hebrew, so the words are matched by
+    their position along the sentence (spoken length), mapped onto the recognised words' real times."""
+    def weight(w):  # English letters and digits are spoken longer than written (API = איי פי איי)
+        return len(w) + 1.5 * sum(c.isascii() and c.isalnum() for c in w) + 1
+    if len(wt) >= 2:
+        tot = sum(max(1, len(x[2])) for x in wt)
+        pts, acc = [], 0
+        for st, en, w in wt:
+            pts.append((acc / tot, st)); acc += max(1, len(w)); pts.append((acc / tot, en))
+    else:
+        pts = [(0.0, 0.1), (1.0, max(0.2, voice - 0.1))]
+
+    def at(f):
+        for (f0, t0), (f1, t1) in zip(pts, pts[1:]):
+            if f <= f1:
+                return t0 if f1 == f0 else t0 + (t1 - t0) * (f - f0) / (f1 - f0)
+        return pts[-1][1]
+    W = [weight(w) for w in words]
+    T, acc, starts = sum(W) or 1, 0, []
+    for w in W:
+        starts.append(at(acc / T)); acc += w
+    ends = starts[1:] + [min(voice + 0.3, at(1.0) + 0.35)]
+    return [(a, max(b, a + 0.12)) for a, b in zip(starts, ends)]
+
+
 def render_scene(i, sc, fr, d, audio_dir):
     au = f"{d}/s{i}.wav"
     tts(sc["say"], au, audio_dir, i)
@@ -206,14 +248,12 @@ def render_scene(i, sc, fr, d, audio_dir):
         b = (0.05 + (k + 1) * step) if k < n - 1 else length + 1
         f.append(f"[{last}][{k + 1}:v]overlay=x=0:y='{"if(lt(t,%.2f),40*pow(1-(t-%.2f)/0.22,2),0)" % (a + 0.22, a) if k == 0 else "0"}':enable='between(t,{a:.2f},{b:.2f})'[v{k + 1}]")
         last = f"v{k + 1}"
-    # captions follow the voice: chunk timing by length
-    total = sum(len(c) + 2 for _, c in fr["caps"]) or 1
-    at = 0.1
-    for k, (_, c) in enumerate(fr["caps"]):
-        span = voice * (len(c) + 2) / total
-        idx = 1 + n + k
-        f.append(f"[{last}][{idx}:v]overlay=0:0:enable='between(t,{at:.2f},{at + span:.2f})'[c{k}]")
-        last = f"c{k}"; at += span
+    # captions follow the real voice: word times from speech recognition (scaled by the tempo change)
+    wt = [(a / TEMPO, b / TEMPO, w) for a, b, w in word_times(au)]
+    times = caption_times([c for _, c in fr["caps"]], voice, wt)
+    for k, (a, b) in enumerate(times):
+        f.append(f"[{last}][{1 + n + k}:v]overlay=0:0:enable='between(t,{a:.2f},{b:.2f})'[c{k}]")
+        last = f"c{k}"
     ai = 1 + n + len(fr["caps"])
     if fr.get("sticker"):  # the sticker drops in with a damped bounce
         f.append(f"[{last}][{ai}:v]overlay=x=0:y='if(lt(t,0.3),-400,50*exp(-9*(t-0.3))*cos(14*(t-0.3)))':enable='gte(t,0.3)'[st]")
