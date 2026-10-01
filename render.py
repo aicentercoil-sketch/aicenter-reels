@@ -142,7 +142,7 @@ def render_frames(spec, d):
             for k, st in enumerate(scene_layers(sc, spec.get("kicker", ""))):
                 pth = f"{d}/s{i}-t{k}.png"; shot(page_html(st), pth); states.append(pth)
             caps = []
-            for k, c in enumerate(caption_chunks(sc["say"])):
+            for k, c in enumerate(caption_chunks(sc.get("text") or sc["say"])):
                 for j, w in enumerate(c.split()):
                     pth = f"{d}/s{i}-c{k}-{j}.png"; shot(page_html(cap_html(c, j)), pth); caps.append((pth, w))
             st = None
@@ -220,19 +220,6 @@ def join(parts, d, out):
         fa.append(f"[{la}][{i}:a]acrossfade=d={XF}[xa{i}]")
         lv, la = f"xv{i}", f"xa{i}"
     total = sum(p[1] for p in parts) - XF * (len(parts) - 1)
-    wh = f"{d}/whoosh.wav"
-    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "anoisesrc=d=0.45:c=pink:a=0.6:r=48000", "-af",
-         "highpass=f=500,lowpass=f=7000,afade=t=in:d=0.25:curve=exp,afade=t=out:st=0.25:d=0.2,volume=0.35", "-ac", "2", wh])
-    offs, o = [], 0.0
-    for i in range(1, len(parts)):
-        o += parts[i - 1][1] - XF; offs.append(o)
-    for k, t0 in enumerate(offs):
-        inputs += ["-i", wh]
-        fa.append(f"[{len(parts) + k}:a]adelay={int(max(0, t0 - 0.2) * 1000)}:all=1[w{k}]")
-    if offs:
-        fa.append(f"[{la}]" + "".join(f"[w{k}]" for k in range(len(offs))) + f"amix=inputs={len(offs) + 1}:duration=first:normalize=0[mx]")
-        la = "mx"
-    # progress bar: a strip that slides in from the left over the whole reel (drawbox's "t" is thickness, not time)
     fv.append(f"color=c=0xA34727:s={W}x12:r={FPS}:d={total:.2f}[pb]")
     fv.append(f"[{lv}][pb]overlay=x='-W+W*t/{total:.2f}':y=0:shortest=1[vout]")
     fa.append(f"[{la}]loudnorm=I=-14:TP=-1.5:LRA=11[aout]")
@@ -268,7 +255,7 @@ def main():
         return
     for _ in range(3):
         job = json.loads(http(API + "?v=3", headers={"X-Reels-Token": TOKEN}) or b"{}")
-        if not job.get("id"):
+        if not isinstance(job, dict) or not job.get("id"):  # an empty queue answers [] or {}
             print("queue empty"); return
         d = f"job{job['id']}"
         build(job, d, f"{d}/reel.mp4")
