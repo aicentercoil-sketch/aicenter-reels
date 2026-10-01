@@ -1,0 +1,42 @@
+name: Render AICenter reels
+# Every 3 hours (and on demand): ask aicenter.co.il for a queued reel, build it from the carousel slides with ffmpeg,
+# upload the MP4 back. The only secret is SITE_TOKEN (Settings > Secrets and variables > Actions).
+on:
+  schedule:
+    - cron: '17 */3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg jq
+      - name: Render queued reels
+        env:
+          SITE_TOKEN: ${{ secrets.SITE_TOKEN }}
+        run: |
+          set -e
+          API="https://aicenter.co.il/api/reels-job.php"
+          for n in 1 2 3; do
+            curl -sf -H "X-Reels-Token: $SITE_TOKEN" "$API" -o job.json || { echo "no job (http error)"; break; }
+            ID=$(jq -r '.id // empty' job.json)
+            if [ -z "$ID" ]; then echo "queue empty"; break; fi
+            echo "job $ID: $(jq -r '.title' job.json)"
+            rm -rf f && mkdir f
+            i=0
+            for u in $(jq -r '.slides[]' job.json); do
+              curl -sf "$u" -o "f/$(printf %02d $i).jpg"
+              i=$((i+1))
+            done
+            SEC=$(jq -r '.seconds // 3' job.json)
+            # each slide on a 9:16 paper background, gentle fade between slides, silent AAC track
+            ffmpeg -y -loglevel error -framerate 1/$SEC -i f/%02d.jpg -f lavfi -i anullsrc=r=48000:cl=stereo \
+              -vf "scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:color=0xF9F6EF,fps=30,format=yuv420p,fade=t=in:st=0:d=0.4" \
+              -c:v libx264 -preset medium -crf 21 -r 30 -c:a aac -b:a 128k -ar 48000 -shortest -movflags +faststart out.mp4
+            ls -la out.mp4
+            curl -sf -H "X-Reels-Token: $SITE_TOKEN" -F "id=$ID" -F "video=@out.mp4;type=video/mp4" "$API"
+            echo
+          done
