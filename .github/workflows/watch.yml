@@ -1,0 +1,40 @@
+name: watch
+# Uptime watch for aicenter.co.il from outside its server (watch.py). A failed run = GitHub emails the owner.
+# The monthly heartbeat commit keeps GitHub from disabling scheduled workflows (60 days without repo activity).
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+    - cron: '23 4 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: watch
+
+jobs:
+  watch:
+    if: github.event.schedule != '23 4 1 * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check the site
+        run: python watch.py
+
+  heartbeat:
+    if: github.event.schedule == '23 4 1 * *'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Monthly heartbeat (keeps scheduled workflows enabled)
+        run: |
+          date -u +%Y-%m-%dT%H:%M:%SZ > .heartbeat
+          git config user.name "aicenter-watch"
+          git config user.email "actions@users.noreply.github.com"
+          git add .heartbeat
+          git commit -m "heartbeat" || exit 0
+          git push
