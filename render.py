@@ -38,6 +38,7 @@ html,body{width:1080px;height:1920px;background:transparent;direction:rtl;font-f
 .sub{font-size:48px;font-weight:500;color:#4A433C;line-height:1.35;max-width:860px}
 .num{width:150px;height:150px;border-radius:44px;background:#A34727;color:#FFFDF8;font-weight:900;font-size:86px;display:grid;place-items:center;box-shadow:0 18px 40px rgba(163,71,39,.35);transform:rotate(-6deg)}
 .brand{position:absolute;top:150px;left:0;right:0;display:flex;justify-content:center;align-items:center;gap:14px;font-weight:800;font-size:34px;color:#2B2622;opacity:.85;direction:ltr}
+.brand .ai{font-family:Heebo,sans-serif;font-weight:700;font-size:24px;color:#4A433C;background:rgba(255,253,248,.75);border:1.5px solid rgba(74,67,60,.25);border-radius:999px;padding:4px 14px;direction:rtl}
 .brand i{width:46px;height:46px;border-radius:13px;background:#A34727;color:#fff;font-style:normal;font-family:'Frank Ruhl Libre',serif;font-size:22px;display:grid;place-items:center}
 .cap{position:absolute;left:70px;right:70px;top:1270px;display:flex;justify-content:center}
 .cap span{font-weight:900;font-size:70px;line-height:1.15;color:#fff;background:rgba(27,25,22,.88);padding:16px 34px;border-radius:26px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.18)}
@@ -102,7 +103,7 @@ def scene_layers(sc, kicker):
         else:
             extra = '<div class="url">aicenter.co.il</div><div class="send">שלחו למי שצריך את זה</div>' if k == n else '<div class="url" style="opacity:0">aicenter.co.il</div>'
             inner = f'<div class="title" style="font-size:{size}px">{words_html(show, k)}</div>{extra}'
-        states.append('<div class="brand"><i>AI</i>AICenter</div><div class="safe">' + inner + "</div>")
+        states.append('<div class="brand"><i>AI</i>AICenter<span class="ai">קריינות AI</span></div><div class="safe">' + inner + "</div>")
     return states
 
 
@@ -286,11 +287,23 @@ def join(parts, d, out):
     return total
 
 
+def mark_ai(path):
+    """IPTC digital-source-type in the file's XMP: "composite with AI elements" (the voice), read by platforms' AI labelling."""
+    import shutil
+    if not shutil.which("exiftool"):
+        print("exiftool missing: no XMP AI mark", flush=True)
+        return
+    subprocess.run(["exiftool", "-q", "-overwrite_original",
+                    "-XMP-iptcExt:DigitalSourceType=http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia",
+                    "-XMP-dc:Description=Narration voice generated with AI (Gemini TTS). AICenter.co.il", path], check=False)
+
+
 def build(spec, d, out, audio_dir=None):
     os.makedirs(d, exist_ok=True)
     frames = render_frames(spec, d)
     parts = [render_scene(i, sc, frames[i], d, audio_dir) for i, sc in enumerate(spec["scenes"])]
     total = join(parts, d, out)
+    mark_ai(out)
     print(f"reel {out}: {os.path.getsize(out)} bytes, {total:.1f}s", flush=True)
 
 
