@@ -267,7 +267,7 @@ def render_scene(i, sc, fr, d, audio_dir):
     return out, length
 
 
-def join(parts, d, out):
+def join(parts, d, out, music=None, gain=0.2):
     inputs, fv, fa = [], [], []
     for p, _ in parts:
         inputs += ["-i", p]
@@ -280,6 +280,15 @@ def join(parts, d, out):
     total = sum(p[1] for p in parts) - XF * (len(parts) - 1)
     fv.append(f"color=c=0xA34727:s={W}x12:r={FPS}:d={total:.2f}[pb]")
     fv.append(f"[{lv}][pb]overlay=x='-W+W*t/{total:.2f}':y=0:shortest=1[vout]")
+    if music:
+        # background music (owner-approved Lyria tracks): looped, well under the voice, ducked further while she speaks
+        mi = len(parts)
+        inputs += ["-stream_loop", "-1", "-i", music]
+        fa.append(f"[{mi}:a]aresample=48000,atrim=0:{total:.2f},volume={gain},afade=t=in:d=0.6,afade=t=out:st={max(0, total - 1.6):.2f}:d=1.5[mus]")
+        fa.append(f"[{la}]asplit=2[vo][vk]")
+        fa.append("[mus][vk]sidechaincompress=threshold=0.02:ratio=5:attack=30:release=350[duck]")
+        fa.append("[vo][duck]amix=inputs=2:duration=first:normalize=0[mx]")
+        la = "mx"
     fa.append(f"[{la}]loudnorm=I=-14:TP=-1.5:LRA=11[aout]")
     run(["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", ";".join(fv + fa), "-map", "[vout]", "-map", "[aout]",
          "-c:v", "libx264", "-profile:v", "high", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p", "-r", str(FPS),
@@ -302,7 +311,16 @@ def build(spec, d, out, audio_dir=None):
     os.makedirs(d, exist_ok=True)
     frames = render_frames(spec, d)
     parts = [render_scene(i, sc, frames[i], d, audio_dir) for i, sc in enumerate(spec["scenes"])]
-    total = join(parts, d, out)
+    music = None
+    if spec.get("music"):
+        music = spec["music"] if os.path.isfile(spec["music"]) else f"{d}/music.mp3"
+        if music == f"{d}/music.mp3":
+            try:
+                with open(music, "wb") as fh:
+                    fh.write(http(spec["music"]))
+            except Exception as e:  # noqa: BLE001  no music rather than no reel
+                print("music download failed:", e, flush=True); music = None
+    total = join(parts, d, out, music, float(spec.get("music_gain", 0.2)))
     mark_ai(out)
     print(f"reel {out}: {os.path.getsize(out)} bytes, {total:.1f}s", flush=True)
 
